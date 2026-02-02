@@ -21,11 +21,6 @@ GBIF_PWD = os.getenv("GBIF_PWD")
 
 
 def main():
-    basis_of_record = ['PRESERVED_SPECIMEN', 'LIVING_SPECIMEN']
-    download(basis_of_record)
-    #pygbif(basis_of_record)
-
-def download(basis_of_record=None):
     # Default Filters:
         # Keywords in dataset description
         # Basis of Record
@@ -33,6 +28,12 @@ def download(basis_of_record=None):
         # Country or area
         # Has coordinates
         # Occurrence status
+    basis_of_record = ['PRESERVED_SPECIMEN', 'LIVING_SPECIMEN']
+    occ_search()
+    #download(dataset_filter, basis_of_record)
+    #pygbif(basis_of_record)
+
+def dataset_filter(basis_of_record=None):
 
     # first, static occurrence dataset filter embedded in url (using requests because pygbif severely lacks features):
     print("Fetching datasets...")
@@ -49,7 +50,7 @@ def download(basis_of_record=None):
     while api_url:
         datasets = r.get(api_url, params=params)
 
-        if datasets.status_code == 200 and params['offset'] <= 52000:
+        if datasets.status_code == 200 and params['offset'] <= 1000:
             # parse json data
             datasets = datasets.json()
             # extract results and add data to full dataset list
@@ -57,7 +58,7 @@ def download(basis_of_record=None):
             # incrementing offset number
             params['offset'] += 1000
             print(".")
-        elif params['offset'] > 52000:
+        elif params['offset'] > 1000:
             # break option 1: offset > count -> download finished
             print(f"Dataset retrieval concluded. Fetched a total of {len(full_data)} datasets.")
             break
@@ -79,120 +80,58 @@ def download(basis_of_record=None):
     time.sleep(2)  # timer to streamline the interactiveness of the process
     print("Total filtered datasets: ", len(keys))
 
-
-    ######################
-    ## DOWNLOAD REQUEST ##
-    ######################
-
-    # third, creating manual dynamic filters for basisOfRecord and former dataset keys for download:
-
-    predicate_datasets = []
-    for key in keys:
-          predicate_datasets.append({
-              "type": "equals",
-              "key": "DATASET_KEY",
-              "value": key
-          })
-
-    predicate_basis = []
-    if basis_of_record is not None:
-        for basis in basis_of_record:
-            predicate_basis.append({
-                'type': 'equals',
-                'key': 'BASIS_OF_RECORD',
-                'value': basis
-            })
+    return keys
 
 
-    # fourth, defining query as a python dict (= json format) / together with plant (taxonKey=6), country, coordinate and occurrence status filters
-    query = {
-      "creator": GBIF_USER,
-      "notificationAddresses": [
-          GBIF_EMAIL
-      ],
-        "sendNotification": True,
-        "format": "SIMPLE_CSV",
-        "predicate": {
-          "type": "and",
-          "predicates": [
-              {
-                          "type": "equals",
-                          "key": "TAXON_KEY",
-                          "value": "6"
-              },
-              {
-                          "type": "in",
-                          "key": "COUNTRY",
-                          "values": [ "PT", "ES" ]
-              },
-              {
-                          "type": "equals",
-                          "key": "HAS_COORDINATE",
-                          "value": "true"
-              },
-              {
-                          "type": "equals",
-                          "key": "HAS_GEOSPATIAL_ISSUE",
-                          "value": "false"
-              },
-              {
-                          "type": "equals",
-                          "key": "OCCURRENCE_STATUS",
-                          "value": "PRESENT"
-              },
-              *predicate_basis,
-              *predicate_datasets
-            ]
-        }
-      }
+def occ_search(keys=None, basis_of_record=None):
 
-    # convert query into a json string
-    query_json = j.dumps(query)
+    # third, cycle through each dataset key extracted earlier
+    #for key in keys:
+        # pagination loop until there are no more occurrences to fetch
+        while True:
+            # offset and limit specification
+            offset = 0
+            limit = 300
 
-    # API endpoint
-    api_url = 'https://api.gbif.org/v1/occurrence/download/request'
+    # fourth, setup filters: plant (taxonKey=6), dataset key, country, coordinate and basis of record and get query
+            dataset = occ.search(
+                taxonKey = 6,
+                datasetKey = "4cf3eec1-b902-40c9-b15b-05c5fe5928b6",#key,
+                country = "PT",#, ES"],
+                hasCoordinate = True,
+                hasGeospatialIssue = False,
+                basisOfRecord = 'HUMAN_OBSERVATION',#basis_of_record[0]
+                offset = offset,
+                limit=5
+            )
 
-    # set the json content type header
-    headers = {
-       "Content-Type": "application/json"
-    }
+    # fifth, for each entry in a call, take taxa name, lat and lon and print to disk
+            for oc in dataset['results']:
 
-    # authentication handling
-    if GBIF_USER and GBIF_PWD:
-        auth = (GBIF_USER, GBIF_PWD)
-    else:
-        auth = None
+                # get taxa full name by concatenating generic, specific and infraspecific names
+                taxa = (
+                oc.get('genericName') + ' ' +
+                oc.get('specificEpithet') + ' ' +
+                oc.get('infraspecificEpithet', ' ')
+                ).strip()
 
-    # example curl request structure:
-    # curl --include --user userName:PASSWORD --header "Content-Type: application/json" --data @query.json https://api.gbif.org/v1/occurrence/download/request
+                # get location data
+                lat = oc.get('decimalLatitude')
+                lon = oc.get('decimalLongitude')
 
-    # fifth, make the post request
-    response = r.post(api_url, headers=headers, data=query_json, auth=auth)
+                # write data in temporary file
+                print(taxa + ", " + str(lat) + ", " + str(lon), file=open('.tempocc', "a"))
 
-    # take in the server response
-    r_code = response.status_code
+                print(taxa, lat, lon)
 
-    # error handling
-    if r_code == 201:
-        print("HTTP 201: Success!")
-    if r_code == 302:
-        print("HTTP 302: Found, redirecting...")
-    if r_code == 400:
-        print("HTTP 400: Bad Request")
-    if r_code == 410:
-        print("HTTP 410: Gone. No longer available.")
+            # break if there are no more occurrences to fetch
+            more = (oc.get('genericName', '') for oc in dataset['results'])
+            if not more:
+                break
 
-    return r_code # for troubleshooting
+            # update the offset for next batch
+            offset += limit
 
-def pygbif(basis_of_record): # testing artifact
-    datasets = []
-    datasets.append('taxonKey = 6')
-    for basis in basis_of_record:
-        datasets.append(f'basisOfRecord = {basis}')
-    print(datasets)
-
-    q = occ.download(format='SIMPLE_CSV', queries=datasets)
-    print(q)
 
 # import protection
 if __name__ == "__main__":
