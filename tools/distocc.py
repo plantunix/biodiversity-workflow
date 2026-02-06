@@ -1,8 +1,10 @@
 import os
+import csv
 import time
 import json as j
 
 import requests as r
+import pandas as pd
 from dotenv import load_dotenv, find_dotenv
 from pygbif import occurrences as occ
 
@@ -28,12 +30,13 @@ def main():
         # Country or area
         # Has coordinates
         # Occurrence status
-    basis_of_record = ['PRESERVED_SPECIMEN', 'LIVING_SPECIMEN']
-    occ_search()
+    basis_of_record = ['LIVING_SPECIMEN', 'LIVING_SPECIMEN', 'HUMAN_OBSERVATION']
+    backbone = "testing_backbone.txt"
+    occ_search(basis_of_record)
+    #reconcile(".tempocc", backbone)
     #download(dataset_filter, basis_of_record)
-    #pygbif(basis_of_record)
 
-def dataset_filter(basis_of_record=None):
+def dataset_filter():
 
     # first, static occurrence dataset filter embedded in url (using requests because pygbif severely lacks features):
     print("Fetching datasets...")
@@ -42,7 +45,7 @@ def dataset_filter(basis_of_record=None):
     params = {
         'type' : 'OCCURRENCE',
         'offset' : 0,
-        'limit' : 1000
+        'limit' : 10#1000
     }
 
     full_data = []
@@ -50,7 +53,7 @@ def dataset_filter(basis_of_record=None):
     while api_url:
         datasets = r.get(api_url, params=params)
 
-        if datasets.status_code == 200 and params['offset'] <= 1000:
+        if datasets.status_code == 200 and params['offset'] <= 10:#53000
             # parse json data
             datasets = datasets.json()
             # extract results and add data to full dataset list
@@ -58,7 +61,7 @@ def dataset_filter(basis_of_record=None):
             # incrementing offset number
             params['offset'] += 1000
             print(".")
-        elif params['offset'] > 1000:
+        elif params['offset'] > 10:#53000
             # break option 1: offset > count -> download finished
             print(f"Dataset retrieval concluded. Fetched a total of {len(full_data)} datasets.")
             break
@@ -83,51 +86,73 @@ def dataset_filter(basis_of_record=None):
     return keys
 
 
-def occ_search(keys=None, basis_of_record=None):
+def occ_search(basis_of_record=None, keys=dataset_filter()):
+    # column names
+    print('taxonName,taxonRank,lat,lon', file=open('.tempocc', "w"))
+    countries = ["PT", "ES"]
 
     # third, cycle through each dataset key extracted earlier
-    #for key in keys:
+    for key in keys:
+        # offset, limit and rate limit specification
+        offset = 0
+        limit = 100#300
+        rate_limit = 0.05
+
         # pagination loop until there are no more occurrences to fetch
         while True:
-            # offset and limit specification
-            offset = 0
-            limit = 300
-
     # fourth, setup filters: plant (taxonKey=6), dataset key, country, coordinate and basis of record and get query
             dataset = occ.search(
                 taxonKey = 6,
-                datasetKey = "4cf3eec1-b902-40c9-b15b-05c5fe5928b6",#key,
-                country = "PT",#, ES"],
+                datasetKey = key,
+                country = countries,
                 hasCoordinate = True,
                 hasGeospatialIssue = False,
-                basisOfRecord = 'HUMAN_OBSERVATION',#basis_of_record[0]
+                basisOfRecord = basis_of_record,
                 offset = offset,
-                limit=5
+                limit=limit
             )
 
-    # fifth, for each entry in a call, take taxa name, lat and lon and print to disk
-            for oc in dataset['results']:
+            # break if there are no more occurrences to fetch
+            if dataset.get('endOfRecords', False) or dataset.get('count', 0) == 0:
+                break
 
-                # get taxa full name by concatenating generic, specific and infraspecific names
-                taxa = (
-                oc.get('genericName') + ' ' +
-                oc.get('specificEpithet') + ' ' +
-                oc.get('infraspecificEpithet', ' ')
-                ).strip()
+    # fifth, for each entry in a call, take taxa name and rank, lat and lon and print to disk
+
+            for oc in dataset['results']:
+                if oc.get('taxonRank') == "FAMILY":
+                    # get family taxon name
+                    taxa = (
+                        oc.get('family')
+                    ).strip()
+                if oc.get('taxonRank') == "GENUS":
+                    # get genus taxon name
+                    taxa = (
+                        oc.get('genus')
+                    ).strip()
+                if oc.get('taxonRank') in ["SPECIES", "SUBSPECIES"]:
+                    # get taxa full name by concatenating generic, specific and infraspecific names
+                    taxa = (
+                    oc.get('genericName') + ' ' +
+                    oc.get('specificEpithet') + ' ' +
+                    oc.get('infraspecificEpithet', ' ')
+                    ).strip()
+                else:
+                    continue
+
+                # get taxonRank
+                rank = (
+                    oc.get('taxonRank')
+                )
 
                 # get location data
                 lat = oc.get('decimalLatitude')
                 lon = oc.get('decimalLongitude')
 
                 # write data in temporary file
-                print(taxa + ", " + str(lat) + ", " + str(lon), file=open('.tempocc', "a"))
+                print(f'{taxa}, ' + f'{rank}, ' + f'{lat}, ' + f'{lon}', file=open('.tempocc', "a"))
 
-                print(taxa, lat, lon)
-
-            # break if there are no more occurrences to fetch
-            more = (oc.get('genericName', '') for oc in dataset['results'])
-            if not more:
-                break
+                # rate limiting
+                time.sleep(rate_limit)
 
             # update the offset for next batch
             offset += limit
