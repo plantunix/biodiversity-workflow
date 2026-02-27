@@ -14,7 +14,7 @@ Python Scripts for <u>sequence </u> and <u>taxonomy metadata </u> retrieval from
   * ### How to run:
     * Run seqmain.py
     * Input species name file
-    * Input gene marker to search for
+    * Input gene marker to search for (e.g rbcl, ITS1, ITS2)
     * Input file format (fasta for simple annotation, gbk for complex metadata)
     * Input output csv file (.csv) 
 
